@@ -1,0 +1,220 @@
+<?php
+
+/**
+ * @file
+ * Provide structure for the administrative interface to Views.
+ */
+
+/**
+ * Implements hook_views_api().
+ */
+function pfe_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'pfe') . '/includes',
+  );
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function pfe_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'eu_order_node_form') {
+    //dpm($form);
+
+    $options_magasin = pfe_get_options_list('m_warehouse', 'mwarehouseId', 'name');
+    $options_fournisseur = pfe_get_options_list('fournisseur', 'adClientId', 'name');
+    
+    $form['field_magasin_d_p_t'][LANGUAGE_NONE]['#options'] += $options_magasin;
+    $form['field_magasin_destinataire'][LANGUAGE_NONE]['#options'] += $options_magasin;
+    $form['field_fournisseur'][LANGUAGE_NONE]['#options'] += $options_fournisseur;
+  }
+}
+
+/**
+ * Implements hook_cron().
+ */
+function pfe_cron() {
+  
+  $result = pfe_get_orders();
+  // For each order create or update existent.
+  dpm($result);
+  foreach ($result as $order) {
+    _pfe_create_update_order($order);
+  }
+}
+
+/**
+ * Get orders list from file.
+ */
+function pfe_get_orders() {
+  $result = array();
+  $path = drupal_get_path('module', 'pfe') . '/import';
+  $file_name = $path . '/EuOrder.txt';
+  // Get file contents.
+  if (file_exists($file_name)) {
+    $handle = fopen($file_name, 'r');
+    $webservice_json_result = fread($handle, filesize($file_name));
+    fclose($handle);
+  }
+
+  // Decode json from file.
+  if (!empty($webservice_json_result)) {
+    $result = drupal_json_decode($webservice_json_result);
+  }
+  
+  return $result;
+}
+
+/**
+ * Create or Update order infos.
+ * @param array $infos
+ *       Order infos.
+ */
+function _pfe_create_update_order($infos) {
+  global $user;
+  $result = _pfe_order_exist($infos['euOrderId']);
+  if ($result == FALSE) {
+    $values = array(
+      'type' => 'eu_order',
+      'uid' => $user->uid,
+      'status' => 1,
+    );
+    $order = entity_create('node', $values);
+
+    $order_wrapper = entity_metadata_wrapper('node', $order);
+    
+    _pfe_set_fields_values($infos, $order_wrapper);
+    // Save order.
+    $order_wrapper->save();
+  }
+  else {
+    //dpm($result);
+    //dpm($infos);
+    // @todo: check update date before proceeding.
+    $order_wrapper = entity_metadata_wrapper('node', $result[0]);
+    _pfe_set_fields_values($infos, $order_wrapper);
+    $order_wrapper->save();
+  }
+}
+
+/**
+ * Check if order exists.
+ * @param string $id
+ *       Order compiere identifier.
+ * @return array|boolean $result
+ *       Existent order or false.
+ */
+function _pfe_set_fields_values($infos, $order_wrapper) {
+  // Label.
+  if (!empty($infos['euOrder'])) {
+    $order_wrapper->title->set($infos['euOrder']);
+  }
+
+  // Order Id.
+  if (!empty($infos['euOrderId'])) {
+    $order_wrapper->field_eu_order_id->set($infos['euOrderId']);
+  }
+
+  // Partner Id.
+  if (!empty($infos['cbpartnerId'])) {
+    $order_wrapper->field_cbpartnerid->set($infos['cbpartnerId']);
+  }
+
+  // Created.
+  if (!empty($infos['created'])) {
+    $order_wrapper->field_created->set(strtotime($infos['created']));
+  }
+
+  // Fournisseur.
+  if (!empty($infos['adClientId'])) {
+    $order_wrapper->field_fournisseur->set($infos['adClientId']);
+  }
+
+  // Magasin departement.
+  if (!empty($infos['mwarehouseId'])) {
+    $order_wrapper->field_magasin_d_p_t->set($infos['mwarehouseId']);
+  }
+
+  // Magasin destinataire.
+  if (!empty($infos['mreferencewarehouseId'])) {
+    $order_wrapper->field_magasin_destinataire->set($infos['mreferencewarehouseId']);
+  }
+
+  // Group order Id.
+  if (!empty($infos['euGroupedorderId'])) {
+    $order_wrapper->field_eu_groupedorder_id->set($infos['euGroupedorderId']);
+  }
+
+  // Date received.
+  if (!empty($infos['datereceived'])) {
+    $order_wrapper->field_datereceived->set(strtotime($infos['datereceived']));
+  }
+
+  // @todo: $order_wrapper->field_active->set($infos['id']);
+  // Mwarehouse Id.
+  if (!empty($infos['mwarehouseId'])) {
+    $order_wrapper->field_mwarehouseid->set($infos['mwarehouseId']);
+  }
+
+  // Doc status.
+  if (!empty($infos['docstatus'])) {
+    $order_wrapper->field_docstatus->set($infos['docstatus']);
+  }
+
+  // Notice.
+  if (!empty($infos['notice'])) {
+    $order_wrapper->field_notice->set($infos['notice']);
+  }
+
+  // @todo : $order_wrapper->field_valeurnet->set($infos['id']);
+  // Vidage optimus.
+  if (!empty($infos['vidageoptimus'])) {
+    $order_wrapper->field_vidage_optimus->set($infos['vidageoptimus']);
+  }
+}
+
+/**
+ * Check if order exists.
+ * @param string $id
+ *       Order compiere identifier.
+ * @return array|boolean $result
+ *       Existent order or false.
+ */
+function _pfe_order_exist($id) {
+  $result = FALSE;
+  $query = new EntityFieldQuery();
+
+  $query->entityCondition('entity_type', 'node')
+    ->entityCondition('bundle', 'eu_order')
+    ->fieldCondition('field_eu_order_id', 'value', $id, '=');
+
+
+  $result = $query->execute();
+
+  if (!empty($result['node'])) {
+    $order_nid = array_keys($result['node']);
+    $result = $order_nid;
+  }
+
+  return $result;
+}
+
+/**
+ * Get Mwarehouse list.
+ * @return array $result
+ *       List mwarehouse.
+ */
+function pfe_get_options_list($table, $id, $name) {
+  $result = db_select($table, 'm')
+    ->fields('m')
+    ->execute()
+    ->fetchAll();
+
+  $options = array();
+  foreach ($result as $value) {
+    $options[$value->$id] = $value->$name;
+  }
+
+  return $options;
+}

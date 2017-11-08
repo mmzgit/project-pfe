@@ -1,0 +1,4 @@
+name = Pfe
+description = Create customized code.
+package = PFE
+core = 7.x
